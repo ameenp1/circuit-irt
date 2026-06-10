@@ -1,0 +1,99 @@
+# circuit-irt — pinned Python environment (Python 3.12)
+#
+# Fully pinned for reproducibility on macOS x86_64 (Intel). Recreate with:
+#   python3.12 -m venv .venv
+#   .venv/bin/pip install --upgrade pip
+#   .venv/bin/pip install --only-binary=:all: -r requirements.txt
+#
+# Platform constraints that drove these versions (Intel macOS):
+#   * torch is capped at 2.2.2 — the last PyTorch release with x86_64 macOS
+#     wheels. torch 2.2.2 was built against NumPy 1.x.
+#   * numpy is therefore pinned <2 (1.26.4); numpy 2.x breaks torch 2.2.2's
+#     array interop ("Failed to initialize NumPy").
+#   * transformers is held at 4.49.0 — transformers 5.x requires torch>=2.4
+#     and silently disables the PyTorch backend on torch 2.2.2.
+#   * numpy<2 pulls pymc down to the 5.x line (pymc 6.x's arviz requires
+#     numpy>=2); pymc 5.25.1 + pytensor 2.31.7 work with numpy 1.26.
+#   * numba/llvmlite pinned to wheeled versions (0.62.1/0.45.1); llvmlite
+#     0.47 has no x86_64 macOS wheel and fails to build from source.
+#
+# On Apple Silicon / Linux you can relax most of these (newer torch + numpy 2.x).
+
+# --- requested top-level packages ---
+numpy==1.26.4
+pandas==2.2.3
+matplotlib==3.10.9
+numpyro==0.19.0
+pymc==5.25.1
+torch==2.2.2
+transformers==4.49.0
+
+# --- pinned transitive deps (full lock for reproducibility) ---
+annotated-doc==0.0.4
+anyio==4.13.0
+arviz==0.23.4
+cachetools==6.2.6
+certifi==2026.5.20
+charset-normalizer==3.4.7
+click==8.4.1
+cloudpickle==3.1.2
+cons==0.4.7
+contourpy==1.3.3
+cycler==0.12.1
+etuples==0.3.10
+filelock==3.29.1
+fonttools==4.63.0
+fsspec==2026.4.0
+h11==0.16.0
+h5netcdf==1.8.1
+h5py==3.16.0
+hf-xet==1.5.1
+httpcore==1.0.9
+httpx==0.28.1
+huggingface_hub==0.36.2
+idna==3.18
+jax==0.4.38
+jaxlib==0.4.38
+Jinja2==3.1.6
+kiwisolver==1.5.0
+lazy-loader==0.5
+llvmlite==0.45.1
+logical-unification==0.4.7
+markdown-it-py==4.2.0
+MarkupSafe==3.0.3
+mdurl==0.1.2
+miniKanren==1.0.5
+ml_dtypes==0.5.4
+mpmath==1.3.0
+multipledispatch==1.0.0
+networkx==3.6.1
+numba==0.62.1
+opt_einsum==3.4.0
+packaging==26.2
+pillow==12.2.0
+platformdirs==4.10.0
+Pygments==2.20.0
+pyparsing==3.3.2
+pytensor==2.31.7
+python-dateutil==2.9.0.post0
+pytz==2026.2
+PyYAML==6.0.3
+regex==2026.5.9
+requests==2.34.2
+rich==15.0.0
+safetensors==0.7.0
+scipy==1.17.1
+setuptools==82.0.1
+shellingham==1.5.4
+six==1.17.0
+sympy==1.14.0
+threadpoolctl==3.6.0
+tokenizers==0.21.4
+toolz==1.1.0
+tqdm==4.68.1
+typer==0.25.1
+typing_extensions==4.15.0
+tzdata==2026.2
+urllib3==2.7.0
+xarray==2026.4.0
+xarray-einstats==0.9.1

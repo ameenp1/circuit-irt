@@ -1,0 +1,16 @@
+# Pointer to the HuggingFace dataset that stores ALL generated artifacts
+# (item bank, metadata, response matrices, frozen snapshots). GitHub holds code
+# only — see circuit_irt/datastore.py for push/pull.
+#
+# 1. Create the dataset repo on HF (yourself), then set repo_id below.
+# 2. Pin `revision` (a commit SHA or tag like "bank-v1") for reproducible loads;
+#    leave null to track the latest commit on main.
+# 3. Auth for pushing: `huggingface-cli login` or set HF_TOKEN in the env.
+
+repo_id: null               # e.g. "your-username/circuit-irt-data"
+revision: null              # e.g. "bank-v1" or a commit SHA; null = latest (main)
+
+artifacts:                  # files under data/ that round-trip to the dataset
+  - candidate_bank.json
+  - item_metadata.parquet
+  - item_metadata.csv

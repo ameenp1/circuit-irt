@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+*.raw
+*.out
+rc_out.txt
+# editable-install / build artifacts
+*.egg-info/
+build/
+.eggs/
+
+# generated artifacts live on HuggingFace (see configs/data.yaml), not git
+data/

@@ -1,0 +1,10 @@
+# Small open respondent models for the Week 3 smoke test (1-3B, ungated,
+# transformers 4.49-compatible — Qwen2.5 / SmolLM2 era). The full roster
+# (20-35 models + frontier APIs) is finalized in Week 5 and runs on GPU.
+models:
+  - id: Qwen/Qwen2.5-0.5B-Instruct
+    max_new_tokens: 400
+  - id: Qwen/Qwen2.5-1.5B-Instruct
+    max_new_tokens: 400
+  - id: HuggingFaceTB/SmolLM2-1.7B-Instruct
+    max_new_tokens: 400
