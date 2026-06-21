@@ -52,16 +52,39 @@ RUN_MODELS=1 .venv/bin/python -m circuit_irt.respondent   # evaluate models.yaml
 
 ## Data
 
-All generated artifacts (item bank, metadata, response matrices, frozen
-snapshots) live in a **HuggingFace dataset**, not git — `data/` is gitignored.
-Set the dataset pointer in `configs/data.yaml`, then:
+Generated artifacts (item bank, metadata, response matrices, frozen snapshots)
+live in the local **`data/` folder**, which is gitignored — it's regenerable
+from seeded code (`python -m circuit_irt.reference`). The backend is set in
+`configs/data.yaml` (`backend: local` for now):
 
 ```bash
-python -m circuit_irt.datastore status   # show configured repo + revision
-python -m circuit_irt.datastore push     # upload data/* to the HF dataset
-python -m circuit_irt.datastore pull      # download them back (at pinned revision)
+python -m circuit_irt.datastore status   # show backend + location
 ```
 
-Reproducibility comes from pinning `revision` (a commit SHA or tag) in
-`configs/data.yaml`, so a code version maps to an exact data version. Auth for
-pushing: `huggingface-cli login` or `HF_TOKEN` in the env.
+**Later**, flip `backend: hf` and set `hf.repo_id` to round-trip `data/` to a
+HuggingFace dataset (`datastore push` / `pull`), with `hf.revision` pinning a
+code version to an exact data version. HF's LFS handles the large response
+matrices; reads/writes use `huggingface-cli login` or `HF_TOKEN`.
+
+## Inference (GPU / RunPod)
+
+Heavy inference (20-35 models, quantization, reasoning models) runs on a GPU pod,
+not the Mac. The model roster + per-model metadata (scale, base/instruct &
+code/general pairs for DIF, reasoning flags, quantization, sampling) is in
+`configs/models.yaml`. Backends: `vllm` (GPU, batched), `hf` (transformers,
+Mac/GPU), `mock` (synthetic, for runner tests).
+
+On a RunPod (or any Linux+CUDA) pod:
+
+```bash
+bash scripts/setup_runpod.sh                 # ngspice + GPU deps + editable install
+python -m circuit_irt.reference              # rebuild the item bank on the pod
+python -m circuit_irt.run_inference --limit 5 --max-items 50 --n-samples 3   # smoke
+python -m circuit_irt.run_inference --n-samples 5                            # full
+```
+
+The runner scores every completion through the grading harness and appends one
+JSONL record per (model, item, sample) to `data/responses.jsonl` — **resumable**,
+so a re-launched spot pod skips finished cells. `requirements-gpu.txt` /
+`docker/Dockerfile.gpu` pin the CUDA stack. Reasoning traces (`<think>…</think>`)
+are stripped before parsing.

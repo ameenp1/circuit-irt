@@ -1,15 +1,19 @@
-"""Round-trip generated artifacts to a HuggingFace dataset repo.
+"""Access generated artifacts (item bank, metadata, response matrices, frozen
+snapshots). Backend is set in configs/data.yaml:
 
-All data (item bank, metadata, response matrices, frozen snapshots) lives on HF,
-not in git — see configs/data.yaml for the repo pointer + pinned revision.
+  backend: local   -> artifacts live in the data/ folder (current default).
+                      push/pull are no-ops; data is produced by the generators
+                      (e.g. `python -m circuit_irt.reference`).
+  backend: hf      -> round-trip data/ <-> a HuggingFace dataset repo, with a
+                      pinned revision for reproducibility.
 
-  push()          upload data/<artifacts> to the HF dataset repo
-  pull()          download them back into data/ (at the pinned revision)
-  load(name)      ensure one artifact is present locally, return its path
-  create_repo()   create the dataset repo (you can also do this on the website)
+  load(name)   ensure an artifact is present under data/, return its path
+  push()/pull() sync with HF (only when backend: hf)
+  create_repo() create the HF dataset repo
 
-Auth for pushing: `huggingface-cli login` or set HF_TOKEN in the env. Reads are
-public if the repo is public, otherwise also need the token.
+The library modules read data/ directly via circuit_irt.paths.DATA, so the
+local pipeline works with no datastore/HF dependency. Auth for HF pushing:
+`huggingface-cli login` or HF_TOKEN in the env.
 
 CLI:  python -m circuit_irt.datastore [status|push|pull]
 """
@@ -29,45 +33,55 @@ def _cfg() -> dict:
     return yaml.safe_load(open(_CFG_PATH))
 
 
-def _require_repo(cfg: dict | None = None) -> dict:
-    cfg = cfg or _cfg()
-    if not cfg.get("repo_id"):
+def _backend(cfg: dict | None = None) -> str:
+    return (cfg or _cfg()).get("backend", "local")
+
+
+def _require_hf(cfg: dict) -> dict:
+    hf = cfg.get("hf") or {}
+    if _backend(cfg) != "hf" or not hf.get("repo_id"):
         raise RuntimeError(
-            f"No HF dataset configured. Set `repo_id` in {_CFG_PATH} "
-            "(create the dataset repo on HuggingFace first).")
-    return cfg
+            f"HF backend not configured. In {_CFG_PATH} set `backend: hf` and "
+            "`hf.repo_id` (create the dataset repo on HuggingFace first).")
+    return hf
 
 
 def create_repo(private: bool = True) -> str:
-    """Create the configured dataset repo on HF (idempotent)."""
     from huggingface_hub import create_repo as _create
-    cfg = _require_repo()
-    _create(cfg["repo_id"], repo_type="dataset", private=private, exist_ok=True)
-    return cfg["repo_id"]
+    hf = _require_hf(_cfg())
+    _create(hf["repo_id"], repo_type="dataset", private=private, exist_ok=True)
+    return hf["repo_id"]
 
 
 def push(filename: str | None = None, message: str = "update artifacts") -> None:
-    """Upload one artifact (or all configured) from data/ to the HF dataset."""
+    cfg = _cfg()
+    if _backend(cfg) == "local":
+        print("backend=local: data lives in data/ — nothing to sync. "
+              "Set `backend: hf` in configs/data.yaml to enable HF push.")
+        return
     from huggingface_hub import upload_file
-    cfg = _require_repo()
+    hf = _require_hf(cfg)
     for name in ([filename] if filename else cfg["artifacts"]):
         path = DATA / name
         if not path.exists():
             raise FileNotFoundError(f"{path} not found — generate it first")
         upload_file(path_or_fileobj=str(path), path_in_repo=name,
-                    repo_id=cfg["repo_id"], repo_type="dataset",
+                    repo_id=hf["repo_id"], repo_type="dataset",
                     commit_message=f"{message}: {name}")
-        print(f"pushed {name} -> {cfg['repo_id']}")
+        print(f"pushed {name} -> {hf['repo_id']}")
 
 
 def pull(filename: str | None = None, revision: str | None = None) -> list:
-    """Download one artifact (or all configured) into data/ at the pinned revision."""
+    cfg = _cfg()
+    if _backend(cfg) == "local":
+        print("backend=local: data already lives in data/ — nothing to pull.")
+        return [DATA / n for n in ([filename] if filename else cfg["artifacts"])]
     from huggingface_hub import hf_hub_download
-    cfg = _require_repo()
-    rev = revision or cfg.get("revision")          # None -> latest on main
+    hf = _require_hf(cfg)
+    rev = revision or hf.get("revision")
     out = []
     for name in ([filename] if filename else cfg["artifacts"]):
-        local = hf_hub_download(cfg["repo_id"], name, repo_type="dataset", revision=rev)
+        local = hf_hub_download(hf["repo_id"], name, repo_type="dataset", revision=rev)
         dest = DATA / name
         shutil.copy(local, dest)
         out.append(dest)
@@ -76,10 +90,14 @@ def pull(filename: str | None = None, revision: str | None = None) -> list:
 
 
 def load(name: str, revision: str | None = None):
-    """Ensure `name` exists under data/ (pull if missing); return its path."""
+    """Ensure `name` exists under data/ (pull from HF if missing); return its path."""
     dest = DATA / name
-    if not dest.exists():
-        pull(name, revision)
+    if dest.exists():
+        return dest
+    if _backend() == "local":
+        raise FileNotFoundError(
+            f"{dest} not found. Generate it (e.g. `python -m circuit_irt.reference`).")
+    pull(name, revision)
     return dest
 
 
@@ -91,8 +109,13 @@ if __name__ == "__main__":
         pull()
     else:
         cfg = _cfg()
-        print("HF data store:")
-        print("  repo_id :", cfg.get("repo_id") or f"(unset — edit {_CFG_PATH})")
-        print("  revision:", cfg.get("revision") or "latest (main)")
+        print("data store:")
+        print("  backend  :", _backend(cfg))
+        if _backend(cfg) == "local":
+            print("  location :", DATA)
+        else:
+            hf = cfg.get("hf") or {}
+            print("  repo_id  :", hf.get("repo_id") or "(unset)")
+            print("  revision :", hf.get("revision") or "latest (main)")
         print("  artifacts:", ", ".join(cfg.get("artifacts", [])))
         print("usage: python -m circuit_irt.datastore [status|push|pull]")

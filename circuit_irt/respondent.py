@@ -17,8 +17,10 @@ additionally evaluates the models in models.yaml on a few items.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
+from collections import Counter
 
 from circuit_irt.families import FAMILIES
 from circuit_irt.harness import (ItemSpec, FailureMode, simulate, extract_metrics, score,
@@ -103,30 +105,50 @@ def _is_netlist(s: str) -> bool:
                if ln[:1].upper() in _ELEM and len(ln.split()) >= 3) >= 1
 
 
+def _unescape(s: str) -> str:
+    try:
+        return s.encode().decode("unicode_escape")
+    except Exception:
+        return s.replace("\\n", "\n").replace('\\"', '"')
+
+
 def parse_completion(text: str) -> str | None:
-    """Recover a circuit netlist from a model completion, or None."""
+    """Recover a circuit netlist from a model completion, or None.
+
+    Tolerant of the ways 1-3B models malform output: fenced/loose/single-quoted
+    JSON, trailing commas, real (unescaped) newlines inside the string, and
+    truncated completions (model hit the token limit mid-netlist)."""
     if not text:
         return None
     text = re.sub(r"<think>.*?</think>", " ", text, flags=re.S | re.I)
     text = re.sub(r"<\|.*?\|>", " ", text)
 
     candidates: list[str] = []
-    # 1. JSON "netlist" field (strict, then loose value-regex for invalid JSON)
+    # 1. strict JSON objects (also retry after stripping trailing commas)
     for m in re.finditer(r"\{.*?\}", text, flags=re.S):
-        try:
-            obj = json.loads(m.group(0))
-            for key in ("netlist", "spice", "circuit"):
-                if isinstance(obj.get(key), str):
-                    candidates.append(obj[key])
-        except Exception:
-            pass
-    for m in re.finditer(r'"(?:netlist|spice|circuit)"\s*:\s*"((?:[^"\\]|\\.)*)"',
-                         text, flags=re.S):
-        candidates.append(m.group(1).encode().decode("unicode_escape"))
-    # 2. fenced code blocks
-    for m in re.finditer(r"```(?:\w+)?\s*(.*?)```", text, flags=re.S):
+        blob = m.group(0)
+        for attempt in (blob, re.sub(r",(\s*[}\]])", r"\1", blob)):
+            try:
+                obj = json.loads(attempt)
+                for key in ("netlist", "spice", "circuit"):
+                    if isinstance(obj.get(key), str):
+                        candidates.append(obj[key])
+                break
+            except Exception:
+                pass
+    # 2. loose value regex for invalid JSON — double- and single-quoted, closed...
+    for q in ('"', "'"):
+        pat = r'["\']netlist["\']\s*:\s*' + q + r'((?:[^' + q + r'\\]|\\.)*)' + q
+        for m in re.finditer(pat, text, flags=re.S):
+            candidates.append(_unescape(m.group(1)))
+    # 3. ...and the truncated case: an opening quote with no close (token cutoff)
+    m = re.search(r'["\']netlist["\']\s*:\s*["\'](.*)$', text, flags=re.S)
+    if m:
+        candidates.append(_unescape(re.split(r'["\']\s*[},]', m.group(1))[0]))
+    # 4. fenced code blocks (may itself be unterminated)
+    for m in re.finditer(r"```(?:\w+)?\s*(.*?)(?:```|$)", text, flags=re.S):
         candidates.append(m.group(1))
-    # 3. the whole thing (bare netlist)
+    # 5. the whole thing (bare netlist)
     candidates.append(text)
 
     for cand in candidates:
@@ -146,23 +168,72 @@ class _PlanItem:
 
 
 def evaluate_completion(completion: str, item: dict) -> dict:
+    """Completion -> netlist -> graded result. Never raises: any internal failure
+    is captured as a labeled record so a long inference run can't be crashed by a
+    single pathological output."""
+    base = {"item_id": item.get("item_id"), "family": item["family_id"],
+            "parsed": False, "label": FailureMode.PARSE_FAILURE.value,
+            "reason": "no_netlist", "ngspice_status": None,
+            "graded": 0.0, "all_pass": False, "failed_metrics": [], "netlist": None}
+
     netlist = parse_completion(completion)
     if netlist is None:
-        return {"parsed": False, "label": FailureMode.PARSE_FAILURE.value,
-                "graded": 0.0, "all_pass": False, "netlist": None}
+        return base                                  # respondent emitted no usable netlist
 
-    fam = FAMILIES[item["family_id"]]
-    objs = tuple(item["objectives"])
-    analyses = tuple(sorted({ANALYSIS_FOR[k] for k in objs}))
-    raw = simulate(netlist, make_plan(_PlanItem(item), analyses))
-    metrics = extract_metrics(raw, fam)
-    targets = {k: (tuple(v) if isinstance(v, list) else v) for k, v in item["targets"].items()}
-    spec = ItemSpec(fam, targets, objs, item["tolerance"], item["corner"])
-    s = score(metrics, spec, syntax_ok=raw.syntax_ok, converged=raw.converged)
-    label = classify(netlist, raw, s, fingerprint(item["reference_netlist"]))
-    return {"parsed": True, "label": label.value, "graded": s["graded"],
-            "all_pass": s["all_pass"], "per_metric_pass": s["per_metric_pass"],
-            "netlist": netlist}
+    base.update(parsed=True, netlist=netlist)
+    try:
+        fam = FAMILIES[item["family_id"]]
+        objs = tuple(item["objectives"])
+        analyses = tuple(sorted({ANALYSIS_FOR[k] for k in objs}))
+        raw = simulate(netlist, make_plan(_PlanItem(item), analyses))
+        metrics = extract_metrics(raw, fam)
+        targets = {k: (tuple(v) if isinstance(v, list) else v)
+                   for k, v in item["targets"].items()}
+        spec = ItemSpec(fam, targets, objs, item["tolerance"], item["corner"])
+        s = score(metrics, spec, syntax_ok=raw.syntax_ok, converged=raw.converged)
+        label = classify(netlist, raw, s, fingerprint(item["reference_netlist"]))
+        failed = [k for k, ok in s["per_metric_pass"].items() if not ok]
+        reason = ({FailureMode.PARSE_FAILURE.value: "invalid_spice",
+                   FailureMode.NON_CONVERGENCE.value: raw.status.value}
+                  .get(label.value))
+        base.update(label=label.value, reason=reason, ngspice_status=raw.status.value,
+                    graded=s["graded"], all_pass=s["all_pass"], failed_metrics=failed)
+    except Exception as e:                            # harness bug / unexpected input
+        logging.exception("harness error on item %s", item.get("item_id"))
+        base.update(label="harness_error", reason=f"{type(e).__name__}: {e}")
+    return base
+
+
+class FailureLog:
+    """Accumulates failure-category counts over a batch (for the Week 6 analysis)."""
+    def __init__(self):
+        self.categories = Counter()
+        self.reasons = Counter()
+        self.records = []
+
+    def record(self, r: dict) -> dict:
+        self.categories[r["label"]] += 1
+        if r.get("reason"):
+            self.reasons[f"{r['label']}:{r['reason']}"] += 1
+        self.records.append({k: r[k] for k in
+                             ("item_id", "family", "label", "reason",
+                              "ngspice_status", "graded", "all_pass")})
+        return r
+
+    def summary(self) -> dict:
+        return {"categories": dict(self.categories), "reasons": dict(self.reasons),
+                "n": len(self.records)}
+
+    def to_json(self, path):
+        json.dump({"summary": self.summary(), "records": self.records},
+                  open(path, "w"), indent=1)
+
+
+def evaluate_batch(pairs, log: FailureLog | None = None):
+    """pairs: iterable of (completion, item). Returns (results, FailureLog)."""
+    log = log or FailureLog()
+    results = [log.record(evaluate_completion(c, it)) for c, it in pairs]
+    return results, log
 
 
 # --------------------------------------------------------------------------- #

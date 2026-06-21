@@ -1,10 +1,70 @@
-# Small open respondent models for the Week 3 smoke test (1-3B, ungated,
-# transformers 4.49-compatible — Qwen2.5 / SmolLM2 era). The full roster
-# (20-35 models + frontier APIs) is finalized in Week 5 and runs on GPU.
+# Candidate open-model roster for circuit-irt inference (~30 models; Week 5
+# finalizes to 20-35, floor 8-10). Runs on GPU (RunPod) via the vllm backend;
+# small models also run on the Mac via the hf backend (leave `backend` unset for
+# auto: vllm on CUDA, hf otherwise). Frontier APIs are added separately in Week 5.
+#
+# Per-model fields:
+#   backend       vllm | hf | mock   (unset = auto)
+#   scale         param count (for the scaling study)
+#   family/type   model family; base | instruct  (matched pairs -> DIF)
+#   domain        general | code     (matched pairs -> DIF)
+#   reasoning     true -> long <think> traces; big max_new_tokens; parser strips them
+#   quantization  awq | gptq | bitsandbytes | null
+#   pair_group    base/instruct or code/general partners share a group (for DIF)
+#   sampling      temperature / top_p / max_new_tokens / max_model_len
+#
+# DIF design: base<->instruct (q25-7b, llama31-8b, q25-0_5b), code<->general
+# (q25-coder-7b<->q25-7b-instruct, q25-coder-14b<->q25-14b-instruct), and
+# reasoning<->standard at matched scale (r1-distill-7b<->q25-7b-instruct).
+#
+# GATED (need access granted to your HF account + HF_TOKEN env var on the pod):
+# all meta-llama/* and google/gemma-2-*. Everything else is ungated.
+
+defaults:
+  temperature: 0.7
+  top_p: 0.95
+  max_new_tokens: 512
+  gpu_mem_util: 0.90
+
 models:
-  - id: Qwen/Qwen2.5-0.5B-Instruct
-    max_new_tokens: 400
-  - id: Qwen/Qwen2.5-1.5B-Instruct
-    max_new_tokens: 400
-  - id: HuggingFaceTB/SmolLM2-1.7B-Instruct
-    max_new_tokens: 400
+  # ---- Qwen2.5 instruct scale ladder (the scaling backbone) ----
+  - {id: Qwen/Qwen2.5-0.5B-Instruct,  scale: 0.5B, family: qwen2.5, type: instruct, domain: general, pair_group: q25-0_5b}
+  - {id: Qwen/Qwen2.5-1.5B-Instruct,  scale: 1.5B, family: qwen2.5, type: instruct, domain: general}
+  - {id: Qwen/Qwen2.5-3B-Instruct,    scale: 3B,   family: qwen2.5, type: instruct, domain: general}
+  - {id: Qwen/Qwen2.5-7B-Instruct,    scale: 7B,   family: qwen2.5, type: instruct, domain: general, pair_group: q25-7b, backend: vllm}
+  - {id: Qwen/Qwen2.5-14B-Instruct,   scale: 14B,  family: qwen2.5, type: instruct, domain: general, pair_group: q25-14b, backend: vllm}
+  - {id: Qwen/Qwen2.5-32B-Instruct-AWQ, scale: 32B, family: qwen2.5, type: instruct, domain: general, quantization: awq, backend: vllm}
+
+  # ---- base <-> instruct pairs (DIF) ----
+  - {id: Qwen/Qwen2.5-0.5B,           scale: 0.5B, family: qwen2.5, type: base, domain: general, pair_group: q25-0_5b}
+  - {id: Qwen/Qwen2.5-7B,             scale: 7B,   family: qwen2.5, type: base, domain: general, pair_group: q25-7b, backend: vllm}
+  - {id: meta-llama/Llama-3.1-8B,          scale: 8B, family: llama3.1, type: base,     domain: general, pair_group: llama31-8b, backend: vllm}
+  - {id: meta-llama/Llama-3.1-8B-Instruct, scale: 8B, family: llama3.1, type: instruct, domain: general, pair_group: llama31-8b, backend: vllm}
+
+  # ---- code <-> general pairs (DIF) ----
+  - {id: Qwen/Qwen2.5-Coder-7B-Instruct,  scale: 7B,  family: qwen2.5, type: instruct, domain: code, pair_group: q25-7b,  max_new_tokens: 1024, backend: vllm}
+  - {id: Qwen/Qwen2.5-Coder-14B-Instruct, scale: 14B, family: qwen2.5, type: instruct, domain: code, pair_group: q25-14b, max_new_tokens: 1024, backend: vllm}
+  - {id: deepseek-ai/deepseek-coder-6.7b-instruct, scale: 6.7B, family: deepseek, type: instruct, domain: code, max_new_tokens: 1024, backend: vllm}
+
+  # ---- reasoning <-> standard at matched scale (DIF) ----
+  - {id: deepseek-ai/DeepSeek-R1-Distill-Qwen-7B,  scale: 7B,  family: r1-distill, type: instruct, domain: general, reasoning: true, max_new_tokens: 8192, pair_group: q25-7b,  backend: vllm}
+  - {id: deepseek-ai/DeepSeek-R1-Distill-Qwen-14B, scale: 14B, family: r1-distill, type: instruct, domain: general, reasoning: true, max_new_tokens: 8192, pair_group: q25-14b, backend: vllm}
+  - {id: Qwen/QwQ-32B,                              scale: 32B, family: qwq, type: instruct, domain: general, reasoning: true, max_new_tokens: 16384, quantization: awq, backend: vllm}
+
+  # ---- other families / scales (breadth) ----
+  - {id: meta-llama/Llama-3.2-1B-Instruct, scale: 1B,   family: llama3.2, type: instruct, domain: general}
+  - {id: meta-llama/Llama-3.2-3B-Instruct, scale: 3B,   family: llama3.2, type: instruct, domain: general}
+  - {id: mistralai/Mistral-7B-Instruct-v0.3, scale: 7B, family: mistral,  type: instruct, domain: general, backend: vllm}
+  - {id: mistralai/Ministral-8B-Instruct-2410, scale: 8B, family: mistral, type: instruct, domain: general, backend: vllm}
+  - {id: google/gemma-2-2b-it,  scale: 2B, family: gemma2, type: instruct, domain: general}
+  - {id: google/gemma-2-9b-it,  scale: 9B, family: gemma2, type: instruct, domain: general, backend: vllm}
+  - {id: microsoft/Phi-3.5-mini-instruct, scale: 3.8B, family: phi3.5, type: instruct, domain: general, backend: vllm}
+  - {id: HuggingFaceTB/SmolLM2-1.7B-Instruct, scale: 1.7B, family: smollm2, type: instruct, domain: general}
+  - {id: allenai/OLMo-2-1124-7B-Instruct, scale: 7B, family: olmo2, type: instruct, domain: general, backend: vllm}
+  - {id: internlm/internlm2_5-7b-chat, scale: 7B, family: internlm2.5, type: instruct, domain: general, backend: vllm}
+
+  # ---- large, quantized (upper anchors) ----
+  # 70B/72B AWQ INT4 (~40 GB) fit a single 80 GB GPU — no tensor-parallel. Add
+  # `tp: 2` only if you rent 2 GPUs.
+  - {id: Qwen/Qwen2.5-72B-Instruct-AWQ, scale: 72B, family: qwen2.5, type: instruct, domain: general, quantization: awq, backend: vllm}
+  - {id: hugging-quants/Meta-Llama-3.1-70B-Instruct-AWQ-INT4, scale: 70B, family: llama3.1, type: instruct, domain: general, quantization: awq, backend: vllm}

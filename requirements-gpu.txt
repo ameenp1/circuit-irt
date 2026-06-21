@@ -1,0 +1,16 @@
+# GPU inference stack for RunPod (Linux + CUDA). NOT for the Mac control plane —
+# the Mac uses the pinned requirements.txt (torch 2.2.2 / numpy<2). Install on the
+# pod with scripts/setup_runpod.sh. ngspice is a system package (apt), not pip.
+#
+# vllm pins a compatible torch+CUDA, so don't pin torch here.
+vllm>=0.6.3
+transformers>=4.46
+accelerate>=1.0
+huggingface_hub>=0.26
+bitsandbytes>=0.44        # bnb-quantized models
+autoawq>=0.2.7            # AWQ-quantized models
+# analysis / harness deps used by the runner + scoring
+numpy
+pandas
+pyarrow
+pyyaml

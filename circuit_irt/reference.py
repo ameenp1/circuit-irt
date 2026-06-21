@@ -37,8 +37,9 @@ ANALYSIS_FOR = {
     "cmrr_db": "ac_cmrr", "icmr_v": "dc_icmr",
 }
 
-# per-family candidate counts (hard tail over-sampled inside each)
-COUNTS = {"filters": 80, "cs_amp": 80, "diff_pair": 55, "two_stage_opamp": 70}
+# per-family candidate counts — balanced across families; the generator's tier
+# weights (15/20/30/35) keep the hard-tail surplus inside each family.
+COUNTS = {"filters": 125, "cs_amp": 125, "diff_pair": 125, "two_stage_opamp": 125}
 
 # objectives each family's reference can actually measure. Unsupported optionals
 # are dropped from an item (a "fix"); q_factor (band-pass) isn't realized by the

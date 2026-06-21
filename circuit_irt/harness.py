@@ -519,19 +519,25 @@ def topology_match(fp: Fingerprint, ref: Fingerprint) -> bool:
 
 def classify(netlist: str, raw: RawOutput, score_result: dict,
              reference_fp: Fingerprint | None = None) -> FailureMode:
-    """Deterministic failure label, in priority order. Doubles as a debug log."""
+    """Deterministic failure label, in priority order. Doubles as a debug log.
+
+    Note PASS is checked before WRONG_TOPOLOGY: the grader is functional, so a
+    design that meets every spec is a pass even if its topology differs from our
+    (single) reference solution. WRONG_TOPOLOGY is reserved for designs that
+    *fail* AND don't match the reference shape — "you built the wrong circuit."
+    """
     if not raw.syntax_ok:
         return FailureMode.PARSE_FAILURE
     if not raw.converged:
         return FailureMode.NON_CONVERGENCE
-    if reference_fp is not None and not topology_match(fingerprint(netlist), reference_fp):
-        return FailureMode.WRONG_TOPOLOGY
     if not score_result.get("gates_pass", True):
         return FailureMode.MIS_SIZED          # right shape, but biased/sized so it
                                               # doesn't even operate (gate failure)
     fails = [k for k, ok in score_result["per_metric_pass"].items() if not ok]
     if not fails:
-        return FailureMode.PASS
+        return FailureMode.PASS               # meets spec -> pass, topology aside
+    if reference_fp is not None and not topology_match(fingerprint(netlist), reference_fp):
+        return FailureMode.WRONG_TOPOLOGY     # fails AND wrong shape
     if len(fails) == 1:
         v = score_result["violations"][fails[0]]
         return (FailureMode.NEAR_MISS if v <= NEAR_MISS_EPS
