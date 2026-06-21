@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "circuit-irt"
 version = "0.1.0"
 description = "IRT-based measurement of LLM analog-circuit design ability (Regeneron STS)"
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 # runtime deps are pinned in requirements.txt (Intel-mac constrained); kept out
 # of here so an editable install doesn't try to re-resolve them.
 dependencies = []

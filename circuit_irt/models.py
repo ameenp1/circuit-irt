@@ -12,8 +12,13 @@ scoring, so R1-distill / QwQ outputs flow through unchanged.
 from __future__ import annotations
 
 import json
+import os
 import random
 import re
+
+# vLLM engine workers must spawn, not fork (avoids "Cannot re-initialize CUDA in
+# forked subprocess"). Set before vllm is imported anywhere.
+os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
 
 from circuit_irt.respondent import build_prompt, LocalModel
 
@@ -41,6 +46,8 @@ class VLLMModel:
             kw["max_model_len"] = spec["max_model_len"]
         if spec.get("tp"):
             kw["tensor_parallel_size"] = spec["tp"]        # multi-GPU
+        if spec.get("enforce_eager"):
+            kw["enforce_eager"] = True                     # skip CUDA-graph compile (fast smoke)
         self.llm = LLM(**kw)
         self.tok = AutoTokenizer.from_pretrained(spec["id"], trust_remote_code=True)
         self.SamplingParams = SamplingParams
@@ -90,13 +97,14 @@ _BACKENDS = {"hf": HFModel, "vllm": VLLMModel, "mock": MockModel}
 
 
 def _auto_backend() -> str:
-    try:
-        import torch
-        if torch.cuda.is_available():
-            import vllm  # noqa: F401
-            return "vllm"
-    except Exception:
-        pass
+    # Detect a GPU WITHOUT importing torch / initializing CUDA in this parent
+    # process (that init is what breaks vLLM's worker startup).
+    import importlib.util
+    import shutil
+    has_gpu = (os.path.exists("/proc/driver/nvidia/version")
+               or bool(shutil.which("nvidia-smi")))
+    if has_gpu and importlib.util.find_spec("vllm") is not None:
+        return "vllm"
     return "hf"
 
 

@@ -223,10 +223,13 @@ if __name__ == "__main__":
     tier_mix = Counter(r["tier"] for r in kept)
     print(f"candidates: {n_cand}  ->  kept: {len(kept)}  "
           f"discarded: {sum(discards.values())} ({sum(discards.values())/n_cand:.0%})")
+    print("discard reasons:", dict(discards) or "none")
+    if not kept:
+        raise SystemExit("ERROR: every reference failed — see discard reasons above "
+                         "(likely an ngspice version/behavior difference on this host).")
     print("kept by family:", dict(fam_mix))
     print("kept by tier:  ", dict(tier_mix),
           f"-> hard-tail {100*(tier_mix['hard']+tier_mix['extreme'])/len(kept):.0f}%")
-    print("discard reasons:", dict(discards) or "none")
     print("items fixed (unmeasurable optional dropped):", dict(fixes) or "none")
     print("avg objectives/item:",
           round(sum(r["n_objectives"] for r in kept) / len(kept), 2))

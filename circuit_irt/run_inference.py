@@ -15,7 +15,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
+
+# vLLM must spawn (not fork) its engine workers, or CUDA-already-initialized in
+# the parent -> "Cannot re-initialize CUDA in forked subprocess". Set before any
+# vllm import.
+os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
 
 import yaml
 
@@ -111,11 +117,16 @@ def _main():
     ap.add_argument("--max-items", type=int, help="use first N items")
     ap.add_argument("--n-samples", type=int, default=5)
     ap.add_argument("--no-resume", action="store_true")
+    ap.add_argument("--eager", action="store_true",
+                    help="enforce_eager: skip vLLM CUDA-graph compile (fast smokes)")
     args = ap.parse_args()
 
     specs = yaml.safe_load(open(args.models))["models"]
     if args.limit:
         specs = specs[:args.limit]
+    if args.eager:
+        for s in specs:
+            s["enforce_eager"] = True
     items = json.load(open(args.bank))["items"]
     if args.max_items:
         items = items[:args.max_items]

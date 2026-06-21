@@ -122,11 +122,15 @@ def _classify(rc: int, blob: str, produced: bool) -> SimStatus:
                               "convergence problems", "gmin stepping failed",
                               "source stepping failed", "supplies reduced")):
         return SimStatus.NONCONVERGENCE
-    if not produced:
-        return SimStatus.NO_OUTPUT
+    # If the expected output was produced and no error pattern fired, it's a
+    # success — ngspice's exit code is unreliable (Ubuntu builds return rc=1 on a
+    # clean batch run with a benign "no .plot/.print" note), so rc only matters
+    # when nothing was produced.
+    if produced:
+        return SimStatus.OK
     if rc != 0:
         return SimStatus.NGSPICE_ERROR
-    return SimStatus.OK
+    return SimStatus.NO_OUTPUT
 
 
 def _load(path: Path, ncols: int) -> np.ndarray | None:
