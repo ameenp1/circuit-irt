@@ -53,18 +53,19 @@ def build_prompt(item) -> list[dict]:
     fam = FAMILIES[item["family_id"]]
     nodes = ", ".join(f"`{n}`" for n in fam.nodes.values())
     system = (
-        "You are an analog IC designer. Given a specification, output a SPICE "
-        "netlist that meets it.\n"
-        "Rules:\n"
-        f"- Use ONLY these node names: {nodes} (0 is ground).\n"
-        "- Emit ONLY the circuit devices and any .model lines. Do NOT include "
-        "power supplies, input sources, load capacitors, .control blocks, or "
-        "analysis commands — those are added by the test bench.\n"
-        "- MOSFETs use a model named NM, e.g. `.model NM NMOS (LEVEL=1 VTO=0.45 "
-        "KP=120u LAMBDA=0.02)`.\n"
-        '- Respond with ONLY a JSON object: {"netlist": "<lines separated by \\n>"}.\n'
-        'Example: {"netlist": "M1 out in 0 0 NM W=80u L=1u\\nRD vdd out 4k\\n'
-        '.model NM NMOS (LEVEL=1 VTO=0.45 KP=120u LAMBDA=0.02)"}')
+        "You are an expert analog IC designer. Output a SPICE netlist (ngspice) "
+        "that meets the spec.\n"
+        f"- Signal input is node `in` (or `inp`/`inm` for differential); output is "
+        f"`out`; `0` is ground. Use only these nodes: {nodes}.\n"
+        "- Two-terminal devices take EXACTLY two nodes: `Rname n1 n2 val`, "
+        "`Cname n1 n2 val`, `Lname n1 n2 val` (e.g. `R1 in out 1k`, `C1 out 0 159n`).\n"
+        "- MOSFETs take four nodes + a model: `M1 drain gate source bulk NM W=50u "
+        "L=1u` with `.model NM NMOS (LEVEL=1 VTO=0.45 KP=120u LAMBDA=0.02)` (use a "
+        "PMOS model where needed). Only include .model lines if you use transistors.\n"
+        "- Emit ONLY the circuit devices (and any .model). Do NOT add power supplies, "
+        "input sources, load capacitors, or .control/.ac/.tran/.op — the test bench "
+        "adds those.\n"
+        '- Respond with ONLY a JSON object: {"netlist": "<lines separated by \\n>"}.')
     user = f"Design a {fam.title.lower()} meeting: {_spec_text(item)}."
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 

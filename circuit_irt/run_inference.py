@@ -75,7 +75,9 @@ def run(specs, items, n_samples, out_path, resume=True):
                         model=mid, item_id=it["item_id"], sample=s,
                         family=it["family_id"], tier=it["tier"],
                         label=r["label"], reason=r["reason"],
-                        graded=r["graded"], all_pass=bool(r["all_pass"]))) + "\n")
+                        graded=r["graded"], all_pass=bool(r["all_pass"]),
+                        netlist=r["netlist"],     # parsed netlist (or None)
+                        completion=comp)) + "\n")  # raw output -> re-score offline, no re-run
                     f.flush()
             del model
             try:
@@ -83,6 +85,26 @@ def run(specs, items, n_samples, out_path, resume=True):
                 gc.collect(); torch.cuda.empty_cache()
             except Exception:
                 pass
+    return out_path
+
+
+def rescore(in_path, bank_path, out_path):
+    """Re-score stored completions against the current bank (new spec tightness,
+    fixed labels, etc.) WITHOUT re-running any model. The whole point of saving
+    `completion` in each record."""
+    items = {it["item_id"]: it for it in json.load(open(bank_path))["items"]}
+    n = 0
+    with open(out_path, "w") as f:
+        for line in open(in_path):
+            rec = json.loads(line)
+            it = items.get(rec["item_id"])
+            if it is None or rec.get("completion") is None:
+                continue
+            r = evaluate_completion(rec["completion"], it)
+            rec.update(label=r["label"], reason=r["reason"], graded=r["graded"],
+                       all_pass=bool(r["all_pass"]), netlist=r["netlist"])
+            f.write(json.dumps(rec) + "\n"); n += 1
+    print(f"re-scored {n} completions -> {out_path}")
     return out_path
 
 
@@ -119,7 +141,14 @@ def _main():
     ap.add_argument("--no-resume", action="store_true")
     ap.add_argument("--eager", action="store_true",
                     help="enforce_eager: skip vLLM CUDA-graph compile (fast smokes)")
+    ap.add_argument("--rescore", action="store_true",
+                    help="re-score stored completions in --out against the bank (no model run)")
     args = ap.parse_args()
+
+    if args.rescore:
+        out = rescore(args.out, args.bank, args.out + ".rescored")
+        print("\n" + json.dumps(variance_summary(assemble(out)), indent=1))
+        return
 
     specs = yaml.safe_load(open(args.models))["models"]
     if args.limit:
