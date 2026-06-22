@@ -9,6 +9,8 @@ if command -v apt-get >/dev/null; then
 fi
 
 echo ">> python deps (GPU stack) + editable install"
+# hf-xet downloads are unreliable on RunPod's network filesystem; use plain HTTPS.
+export HF_HUB_DISABLE_XET=1
 pip install -U pip
 pip install -r requirements-gpu.txt
 pip install -e .

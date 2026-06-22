@@ -16,12 +16,18 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 # vLLM must spawn (not fork) its engine workers, or CUDA-already-initialized in
 # the parent -> "Cannot re-initialize CUDA in forked subprocess". Set before any
 # vllm import.
 os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
+# hf-xet's concurrent writers fail on RunPod's network filesystem ("Background
+# writer channel closed"); plain HTTPS downloads are reliable there. Override
+# with HF_HUB_DISABLE_XET=0 on hosts where xet works.
+os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 
 import yaml
 
@@ -143,6 +149,11 @@ def _main():
                     help="enforce_eager: skip vLLM CUDA-graph compile (fast smokes)")
     ap.add_argument("--rescore", action="store_true",
                     help="re-score stored completions in --out against the bank (no model run)")
+    ap.add_argument("--single-model",
+                    help="(internal) run exactly one model in this process")
+    ap.add_argument("--prune-cache", action="store_true",
+                    help="delete each model's HF weights after it runs (bounds disk "
+                         "to ~one model; needed on small-volume pods)")
     args = ap.parse_args()
 
     if args.rescore:
@@ -160,8 +171,48 @@ def _main():
     if args.max_items:
         items = items[:args.max_items]
 
-    run(specs, items, args.n_samples, args.out, resume=not args.no_resume)
+    # --- worker mode: run exactly one model in THIS process, then exit ---------
+    if args.single_model:
+        spec = next(s for s in specs if s["id"] == args.single_model)
+        run([spec], items, args.n_samples, args.out, resume=not args.no_resume)
+        return
+
+    # --- orchestrator: one SUBPROCESS per model so the OS reclaims all GPU VRAM
+    # between models (a long-lived process leaks VRAM across vLLM loads). -------
+    done = _load_done(Path(args.out)) if not args.no_resume else set()
+    for spec in specs:
+        mid = spec["id"]
+        if all((mid, it["item_id"], s) in done
+               for it in items for s in range(args.n_samples)):
+            print(f"[{mid}] already complete — skipping")
+            continue
+        cmd = [sys.executable, "-m", "circuit_irt.run_inference",
+               "--single-model", mid, "--models", args.models, "--bank", args.bank,
+               "--out", args.out, "--n-samples", str(args.n_samples)]
+        if args.limit:
+            cmd += ["--limit", str(args.limit)]
+        if args.max_items:
+            cmd += ["--max-items", str(args.max_items)]
+        if args.eager:
+            cmd.append("--eager")
+        print(f"\n=== launching {mid} in an isolated process ===", flush=True)
+        subprocess.run(cmd)                       # fresh process -> VRAM freed on exit
+        if args.prune_cache:
+            _prune_model_cache(mid)               # free disk before the next download
+
     print("\n" + json.dumps(variance_summary(assemble(args.out)), indent=1))
+
+
+def _prune_model_cache(model_id: str):
+    """Delete a model's HF weights to keep disk bounded on small-volume pods."""
+    import shutil
+    hub = (os.environ.get("HF_HUB_CACHE")
+           or (os.path.join(os.environ["HF_HOME"], "hub") if os.environ.get("HF_HOME")
+               else os.path.expanduser("~/.cache/huggingface/hub")))
+    d = os.path.join(hub, "models--" + model_id.replace("/", "--"))
+    if os.path.isdir(d):
+        shutil.rmtree(d, ignore_errors=True)
+        print(f"    pruned cache: {d}", flush=True)
 
 
 if __name__ == "__main__":
