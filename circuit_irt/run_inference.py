@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -154,6 +155,9 @@ def _main():
     ap.add_argument("--prune-cache", action="store_true",
                     help="delete each model's HF weights after it runs (bounds disk "
                          "to ~one model; needed on small-volume pods)")
+    ap.add_argument("--model-timeout", type=int, default=5400,
+                    help="kill+skip a model if its process exceeds this many seconds "
+                         "(download+load+inference); prevents a hung model stalling the run")
     args = ap.parse_args()
 
     if args.rescore:
@@ -196,7 +200,15 @@ def _main():
         if args.eager:
             cmd.append("--eager")
         print(f"\n=== launching {mid} in an isolated process ===", flush=True)
-        subprocess.run(cmd)                       # fresh process -> VRAM freed on exit
+        # own process group so a watchdog timeout kills the child + its vLLM
+        # grandchildren (a hung download must not stall the whole roster).
+        proc = subprocess.Popen(cmd, start_new_session=True)
+        try:
+            proc.wait(timeout=args.model_timeout)
+        except subprocess.TimeoutExpired:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            proc.wait()
+            print(f"[{mid}] TIMEOUT after {args.model_timeout}s — killed, moving on", flush=True)
         if args.prune_cache:
             _prune_model_cache(mid)               # free disk before the next download
 

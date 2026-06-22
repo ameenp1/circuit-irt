@@ -38,6 +38,14 @@ class VLLMModel:
     def __init__(self, spec: dict):
         from vllm import LLM, SamplingParams
         from transformers import AutoTokenizer
+        # Pre-fetch weights so a slow (xet-disabled, plain-HTTPS) download doesn't
+        # stall vLLM's engine-startup handshake ("Did not receive response from
+        # front-end process within 5 minutes"). vLLM then loads from local cache.
+        try:
+            from huggingface_hub import snapshot_download
+            snapshot_download(spec["id"])
+        except Exception as e:
+            print(f"  (pre-download note: {type(e).__name__}: {e})", flush=True)
         kw = dict(model=spec["id"], dtype="auto", trust_remote_code=True,
                   gpu_memory_utilization=spec.get("gpu_mem_util", 0.90))
         if spec.get("quantization"):
